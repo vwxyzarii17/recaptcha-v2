@@ -1,0 +1,6 @@
+selenium
+flask
+requests
+SpeechRecognition
+pydub
+gunicorn
