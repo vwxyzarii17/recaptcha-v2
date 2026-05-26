@@ -11,13 +11,10 @@ from pydub import AudioSegment
 
 from flask import Flask, request, jsonify
 
-from threading import Lock
-
 import requests
 import time
 import random
 import os
-import json
 
 # =========================
 # ENV
@@ -33,117 +30,34 @@ os.environ["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
 app = Flask(__name__)
 
 # =========================
-# GLOBAL
+# FIREFOX DRIVER
 # =========================
 
-driver = None
-wait = None
-
-# =========================
-# THREAD LOCK
-# =========================
-
-driver_lock = Lock()
-
-# =========================
-# INIT DRIVER
-# =========================
-
-def init_driver():
-
-    global driver
-    global wait
+def create_driver():
 
     options = Options()
 
-    # =========================
     # NON HEADLESS
-    # =========================
-
-    # JANGAN tambah --headless
-
     options.add_argument("--width=900")
     options.add_argument("--height=700")
 
-    # =========================
     # ANTI DETECT
-    # =========================
+    options.set_preference("dom.webdriver.enabled", False)
+    options.set_preference("media.navigator.enabled", False)
+    options.set_preference("media.peerconnection.enabled", False)
+    options.set_preference("privacy.resistFingerprinting", False)
+    options.set_preference("useAutomationExtension", False)
 
-    options.set_preference(
-        "dom.webdriver.enabled",
-        False
-    )
-
-    options.set_preference(
-        "media.navigator.enabled",
-        False
-    )
-
-    options.set_preference(
-        "media.peerconnection.enabled",
-        False
-    )
-
-    options.set_preference(
-        "privacy.resistFingerprinting",
-        False
-    )
-
-    options.set_preference(
-        "webgl.disabled",
-        False
-    )
-
-    options.set_preference(
-        "useAutomationExtension",
-        False
-    )
-
-    # =========================
     # PERFORMANCE
-    # =========================
+    options.set_preference("permissions.default.image", 2)
 
-    options.set_preference(
-        "permissions.default.image",
-        2
-    )
-
-    options.set_preference(
-        "toolkit.cosmeticAnimations.enabled",
-        False
-    )
-
-    options.set_preference(
-        "browser.cache.disk.enable",
-        True
-    )
-
-    options.set_preference(
-        "browser.cache.memory.enable",
-        True
-    )
-
-    options.set_preference(
-        "browser.tabs.remote.autostart",
-        False
-    )
-
-    # =========================
     # USER AGENT
-    # =========================
-
     options.set_preference(
         "general.useragent.override",
         "Mozilla/5.0 (Android 13; Mobile; rv:120.0) Gecko/120.0 Firefox/120.0"
     )
 
-    # =========================
-    # DRIVER
-    # =========================
-
-    service = Service(
-        "/usr/local/bin/geckodriver"
-    )
+    service = Service("/usr/local/bin/geckodriver")
 
     driver = webdriver.Firefox(
         service=service,
@@ -152,53 +66,37 @@ def init_driver():
 
     driver.set_window_size(900, 700)
 
-    wait = WebDriverWait(driver, 20)
-
-    driver.get("about:blank")
-
-    print("firefox ready")
+    return driver
 
 # =========================
-# CAPTCHA SOLVER
+# SOLVER
 # =========================
 
 def solve_recaptcha(url):
 
-    global driver
-    global wait
-
-    solve_start = time.time()
-
-    recognizer = sr.Recognizer()
-
-    session = requests.Session()
-
-    main_tab = driver.current_window_handle
-
-    driver.execute_script(
-        "window.open('about:blank','_blank');"
-    )
-
-    driver.switch_to.window(
-        driver.window_handles[-1]
-    )
+    driver = None
 
     try:
 
-        print("\nOPEN:", url)
+        driver = create_driver()
+
+        wait = WebDriverWait(driver, 20)
+
+        recognizer = sr.Recognizer()
+
+        session = requests.Session()
+
+        print("OPEN:", url)
 
         driver.get(url)
 
         time.sleep(random.uniform(2, 4))
 
         # =========================
-        # FIND RECAPTCHA
+        # FIND CHECKBOX FRAME
         # =========================
 
-        frames = driver.find_elements(
-            By.TAG_NAME,
-            "iframe"
-        )
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
 
         found = False
 
@@ -226,10 +124,7 @@ def solve_recaptcha(url):
 
         checkbox = wait.until(
             EC.element_to_be_clickable(
-                (
-                    By.ID,
-                    "recaptcha-anchor"
-                )
+                (By.ID, "recaptcha-anchor")
             )
         )
 
@@ -240,15 +135,12 @@ def solve_recaptcha(url):
         print("checkbox clicked")
 
         # =========================
-        # OPEN AUDIO MODE
+        # AUDIO MODE
         # =========================
 
         driver.switch_to.default_content()
 
-        frames = driver.find_elements(
-            By.TAG_NAME,
-            "iframe"
-        )
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
 
         for frame in frames:
 
@@ -261,18 +153,13 @@ def solve_recaptcha(url):
 
         audio_button = wait.until(
             EC.element_to_be_clickable(
-                (
-                    By.ID,
-                    "recaptcha-audio-button"
-                )
+                (By.ID, "recaptcha-audio-button")
             )
         )
 
-        time.sleep(random.uniform(1, 2))
-
         audio_button.click()
 
-        print("audio mode opened")
+        print("audio mode")
 
         time.sleep(2)
 
@@ -284,42 +171,27 @@ def solve_recaptcha(url):
 
             try:
 
-                print(f"\nATTEMPT {attempt+1}")
+                print(f"ATTEMPT {attempt+1}")
 
                 audio_source = wait.until(
                     EC.presence_of_element_located(
-                        (
-                            By.ID,
-                            "audio-source"
-                        )
+                        (By.ID, "audio-source")
                     )
                 )
 
                 audio_url = audio_source.get_attribute("src")
 
-                print("audio:", audio_url)
+                print(audio_url)
 
-                # =========================
                 # DOWNLOAD AUDIO
-                # =========================
 
-                r = session.get(
-                    audio_url,
-                    timeout=15
-                )
+                r = session.get(audio_url, timeout=15)
 
-                with open(
-                    "captcha.mp3",
-                    "wb"
-                ) as f:
+                with open("captcha.mp3", "wb") as f:
 
                     f.write(r.content)
 
-                print("audio downloaded")
-
-                # =========================
                 # CONVERT
-                # =========================
 
                 AudioSegment.from_mp3(
                     "captcha.mp3"
@@ -328,65 +200,40 @@ def solve_recaptcha(url):
                     format="wav"
                 )
 
-                print("converted")
-
-                # =========================
                 # SPEECH TO TEXT
-                # =========================
 
-                with sr.AudioFile(
-                    "captcha.wav"
-                ) as source:
+                with sr.AudioFile("captcha.wav") as source:
 
                     audio_data = recognizer.record(source)
 
-                text = recognizer.recognize_google(
-                    audio_data
-                )
+                text = recognizer.recognize_google(audio_data)
 
                 print("TEXT:", text)
 
-                # =========================
                 # INPUT
-                # =========================
 
                 input_box = wait.until(
                     EC.presence_of_element_located(
-                        (
-                            By.ID,
-                            "audio-response"
-                        )
+                        (By.ID, "audio-response")
                     )
                 )
 
                 input_box.clear()
 
-                time.sleep(random.uniform(0.5, 1))
-
                 input_box.send_keys(text)
 
-                print("typed")
-
-                # =========================
                 # VERIFY
-                # =========================
 
                 verify_button = driver.find_element(
                     By.ID,
                     "recaptcha-verify-button"
                 )
 
-                time.sleep(random.uniform(0.5, 1))
-
                 verify_button.click()
-
-                print("verify clicked")
 
                 time.sleep(3)
 
-                # =========================
                 # CHECK SUCCESS
-                # =========================
 
                 driver.switch_to.default_content()
 
@@ -408,9 +255,7 @@ def solve_recaptcha(url):
                         checked = driver.find_element(
                             By.ID,
                             "recaptcha-anchor"
-                        ).get_attribute(
-                            "aria-checked"
-                        )
+                        ).get_attribute("aria-checked")
 
                         if checked == "true":
 
@@ -420,31 +265,14 @@ def solve_recaptcha(url):
 
                 if solved:
 
-                    driver.switch_to.default_content()
+                    print("SUCCESS")
 
-                    token = wait.until(
-                        EC.presence_of_element_located(
-                            (
-                                By.NAME,
-                                "g-recaptcha-response"
-                            )
-                        )
-                    ).get_attribute("value")
-
-                    result = {
+                    return {
                         "success": True,
-                        "token": token,
-                        "solve_time": round(
-                            time.time() - solve_start,
-                            2
-                        )
+                        "message": "captcha solved"
                     }
 
-                    print(json.dumps(result, indent=4))
-
-                    return result
-
-                print("retrying")
+                # RETRY
 
                 driver.switch_to.default_content()
 
@@ -464,10 +292,7 @@ def solve_recaptcha(url):
 
                 reload_btn = wait.until(
                     EC.element_to_be_clickable(
-                        (
-                            By.ID,
-                            "recaptcha-reload-button"
-                        )
+                        (By.ID, "recaptcha-reload-button")
                     )
                 )
 
@@ -493,40 +318,21 @@ def solve_recaptcha(url):
 
     finally:
 
-        try:
-
-            driver.delete_all_cookies()
-
-        except:
-            pass
-
-        try:
-
-            driver.execute_script("""
-            window.localStorage.clear();
-            window.sessionStorage.clear();
-            """)
-
-        except:
-            pass
-
-        try:
-
-            driver.close()
-
-            driver.switch_to.window(main_tab)
-
-            driver.get("about:blank")
-
-        except Exception as e:
-
-            print("tab cleanup error:", e)
+        # DELETE FILES
 
         for f in ["captcha.mp3", "captcha.wav"]:
 
             if os.path.exists(f):
 
                 os.remove(f)
+
+        # CLOSE FIREFOX
+
+        if driver:
+
+            driver.quit()
+
+            print("firefox closed")
 
 # =========================
 # API
@@ -560,15 +366,7 @@ def solve():
             "message": "url required"
         })
 
-    with driver_lock:
-
-        global driver
-
-        if driver is None:
-
-            init_driver()
-
-        result = solve_recaptcha(url)
+    result = solve_recaptcha(url)
 
     return jsonify(result)
 
@@ -578,17 +376,8 @@ def solve():
 
 if __name__ == "__main__":
 
-    init_driver()
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            7860
-        )
-    )
-
     app.run(
         host="0.0.0.0",
-        port=port,
+        port=7860,
         threaded=True
-  )
+    )
