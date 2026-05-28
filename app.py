@@ -6,6 +6,15 @@ from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    TimeoutException,
+    WebDriverException
+)
+
+from stem import Signal
+from stem.control import Controller
+
 import speech_recognition as sr
 from pydub import AudioSegment
 
@@ -13,14 +22,14 @@ from flask import Flask, request, jsonify
 
 import requests
 import time
-import random
 import os
+import json
 
 # =========================
 # ENV
 # =========================
 
-os.environ["DISPLAY"] = ":99"
+os.environ["PATH"] += ":/data/data/com.termux/files/usr/bin"
 os.environ["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
 
 # =========================
@@ -30,34 +39,224 @@ os.environ["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
 app = Flask(__name__)
 
 # =========================
-# FIREFOX DRIVER
+# GLOBAL
 # =========================
 
-def create_driver():
+driver = None
+wait = None
+
+# =========================
+# TOR IP ROTATE
+# =========================
+
+def renew_tor_ip():
+
+    try:
+
+        with Controller.from_port(port=9051) as controller:
+
+            controller.authenticate()
+
+            controller.signal(Signal.CLEARDNSCACHE)
+
+            controller.signal(Signal.NEWNYM)
+
+        print("\nTOR IP CHANGED\n")
+
+        time.sleep(10)
+
+        return True
+
+    except Exception as e:
+
+        print("FAILED CHANGE IP:", e)
+
+        return False
+
+# =========================
+# RESTART FIREFOX
+# =========================
+
+def restart_driver():
+
+    global driver
+    global wait
+
+    print("\nRESTARTING FIREFOX...\n")
+
+    try:
+        driver.quit()
+    except:
+        pass
+
+    time.sleep(1)
+
+    init_driver()
+
+# =========================
+# HOME
+# =========================
+
+@app.route("/")
+def home():
+
+    return jsonify({
+        "success": True,
+        "message": "solver online"
+    })
+
+# =========================
+# INIT FIREFOX
+# =========================
+
+def init_driver():
+
+    global driver
+    global wait
 
     options = Options()
 
-    # NON HEADLESS
-    options.add_argument("--width=900")
-    options.add_argument("--height=700")
+    # headless
+    options.add_argument("-headless")
 
-    # ANTI DETECT
-    options.set_preference("dom.webdriver.enabled", False)
-    options.set_preference("media.navigator.enabled", False)
-    options.set_preference("media.peerconnection.enabled", False)
-    options.set_preference("privacy.resistFingerprinting", False)
-    options.set_preference("useAutomationExtension", False)
+    # termux x11
+    options.add_argument("--display=:1")
 
-    # PERFORMANCE
-    options.set_preference("permissions.default.image", 2)
+    # =========================
+    # TOR
+    # =========================
 
-    # USER AGENT
     options.set_preference(
-        "general.useragent.override",
-        "Mozilla/5.0 (Android 13; Mobile; rv:120.0) Gecko/120.0 Firefox/120.0"
+        "network.proxy.type",
+        1
     )
 
-    service = Service("/usr/local/bin/geckodriver")
+    options.set_preference(
+        "network.proxy.socks",
+        "127.0.0.1"
+    )
+
+    options.set_preference(
+        "network.proxy.socks_port",
+        9050
+    )
+
+    options.set_preference(
+        "network.proxy.socks_version",
+        5
+    )
+
+    options.set_preference(
+        "network.proxy.socks_remote_dns",
+        True
+    )
+
+    # =========================
+    # ANTI LEAK
+    # =========================
+
+    options.set_preference(
+        "media.peerconnection.enabled",
+        False
+    )
+
+    # =========================
+    # ANTI FINGERPRINT
+    # =========================
+
+    options.set_preference(
+        "privacy.firstparty.isolate",
+        True
+    )
+
+    options.set_preference(
+        "network.cookie.cookieBehavior",
+        1
+    )
+
+    options.set_preference(
+        "privacy.resistFingerprinting",
+        True
+    )
+
+    # =========================
+    # ANTI SELENIUM
+    # =========================
+
+    options.set_preference(
+        "dom.webdriver.enabled",
+        False
+    )
+
+    options.set_preference(
+        "useAutomationExtension",
+        False
+    )
+
+    options.set_preference(
+        "media.navigator.enabled",
+        False
+    )
+
+    # =========================
+    # SPEED
+    # =========================
+
+    options.set_preference(
+        "permissions.default.image",
+        2
+    )
+
+    options.set_preference(
+        "toolkit.cosmeticAnimations.enabled",
+        False
+    )
+
+    options.set_preference(
+        "browser.cache.disk.enable",
+        True
+    )
+
+    options.set_preference(
+        "browser.cache.memory.enable",
+        True
+    )
+
+    # =========================
+    # STARTUP
+    # =========================
+
+    options.set_preference(
+        "browser.startup.page",
+        0
+    )
+
+    options.set_preference(
+        "browser.startup.homepage",
+        "about:blank"
+    )
+
+    options.set_preference(
+        "startup.homepage_welcome_url",
+        "about:blank"
+    )
+
+    options.set_preference(
+        "startup.homepage_welcome_url.additional",
+        ""
+    )
+
+    options.set_preference(
+        "browser.newtabpage.enabled",
+        False
+    )
+
+    print("START FIREFOX")
+
+    service = Service(
+        "/data/data/com.termux/files/usr/bin/geckodriver",
+        log_output=os.devnull
+    )
 
     driver = webdriver.Firefox(
         service=service,
@@ -66,41 +265,46 @@ def create_driver():
 
     driver.set_window_size(900, 700)
 
-    return driver
+    driver.set_page_load_timeout(30)
+
+    wait = WebDriverWait(driver, 15)
+
+    # remove extra tabs
+    tabs = driver.window_handles
+
+    if len(tabs) > 1:
+
+        main_tab = tabs[0]
+
+        for tab in tabs[1:]:
+
+            driver.switch_to.window(tab)
+            driver.close()
+
+        driver.switch_to.window(main_tab)
+
+    # block popup
+    driver.execute_script("""
+    window.open = function(){};
+    """)
+
+    print("FIREFOX READY")
 
 # =========================
-# SOLVER
+# SWITCH ANCHOR
 # =========================
 
-def solve_recaptcha(url):
+def switch_to_anchor():
 
-    driver = None
+    global driver
 
-    try:
+    driver.switch_to.default_content()
 
-        driver = create_driver()
+    frames = driver.find_elements(By.TAG_NAME, "iframe")
 
-        wait = WebDriverWait(driver, 20)
+    for frame in frames:
 
-        recognizer = sr.Recognizer()
-
-        session = requests.Session()
-
-        print("OPEN:", url)
-
-        driver.get(url)
-
-        time.sleep(random.uniform(2, 4))
-
-        # =========================
-        # FIND CHECKBOX FRAME
-        # =========================
-
-        frames = driver.find_elements(By.TAG_NAME, "iframe")
-
-        found = False
-
-        for frame in frames:
+        try:
 
             src = frame.get_attribute("src")
 
@@ -108,90 +312,187 @@ def solve_recaptcha(url):
 
                 driver.switch_to.frame(frame)
 
-                found = True
-                break
+                return True
 
-        if not found:
+        except:
+            pass
 
-            return {
-                "success": False,
-                "message": "recaptcha not found"
-            }
+    return False
 
-        # =========================
-        # CLICK CHECKBOX
-        # =========================
+# =========================
+# SWITCH BFRAME
+# =========================
 
-        checkbox = wait.until(
-            EC.element_to_be_clickable(
-                (By.ID, "recaptcha-anchor")
-            )
-        )
+def switch_to_bframe():
 
-        time.sleep(random.uniform(1, 2))
+    global driver
 
-        checkbox.click()
+    driver.switch_to.default_content()
 
-        print("checkbox clicked")
+    frames = driver.find_elements(By.TAG_NAME, "iframe")
 
-        # =========================
-        # AUDIO MODE
-        # =========================
+    for frame in frames:
 
-        driver.switch_to.default_content()
-
-        frames = driver.find_elements(By.TAG_NAME, "iframe")
-
-        for frame in frames:
+        try:
 
             src = frame.get_attribute("src")
 
             if src and "bframe" in src:
 
                 driver.switch_to.frame(frame)
-                break
+
+                return True
+
+        except:
+            pass
+
+    return False
+
+# =========================
+# SOLVER
+# =========================
+
+def solve_recaptcha(url):
+
+    global driver
+    global wait
+
+    recognizer = sr.Recognizer()
+
+    session = requests.Session()
+
+    solve_start = time.time()
+
+    try:
+
+        # =========================
+        # NEW TOR IP
+        # =========================
+
+        renew_tor_ip()
+
+        # =========================
+        # CHECK IP
+        # =========================
+
+        driver.get("https://api.ipify.org")
+
+        print("TOR IP:", driver.page_source)
+
+        # =========================
+        # OPEN TARGET
+        # =========================
+
+        driver.delete_all_cookies()
+
+        print("\nOPEN:", url)
+
+        driver.get(url)
+
+        
+
+        print("TITLE:", driver.title)
+
+        # =========================
+        # FIND CHECKBOX
+        # =========================
+
+        if not switch_to_anchor():
+
+            return {
+                "success": False,
+                "message": "anchor iframe not found"
+            }
+
+        checkbox = wait.until(
+            EC.element_to_be_clickable(
+                (
+                    By.ID,
+                    "recaptcha-anchor"
+                )
+            )
+        )
+
+        checkbox.click()
+
+        print("CHECKBOX CLICKED")
+
+        time.sleep(1)
+
+        # =========================
+        # AUDIO MODE
+        # =========================
+
+        if not switch_to_bframe():
+
+            return {
+                "success": False,
+                "message": "bframe not found"
+            }
 
         audio_button = wait.until(
             EC.element_to_be_clickable(
-                (By.ID, "recaptcha-audio-button")
+                (
+                    By.ID,
+                    "recaptcha-audio-button"
+                )
             )
         )
 
         audio_button.click()
 
-        print("audio mode")
-
-        time.sleep(2)
+        print("AUDIO MODE CLICKED")
 
         # =========================
-        # SOLVE LOOP
+        # ATTEMPTS
         # =========================
 
         for attempt in range(10):
 
             try:
 
-                print(f"ATTEMPT {attempt+1}")
+                print(f"\nATTEMPT {attempt + 1}")
+
+                # refresh frame
+                if not switch_to_bframe():
+
+                    raise Exception("bframe missing")
+
+                # =========================
+                # AUDIO URL
+                # =========================
 
                 audio_source = wait.until(
                     EC.presence_of_element_located(
-                        (By.ID, "audio-source")
+                        (
+                            By.ID,
+                            "audio-source"
+                        )
                     )
                 )
 
                 audio_url = audio_source.get_attribute("src")
 
-                print(audio_url)
+                print("AUDIO URL:", audio_url)
 
+                # =========================
                 # DOWNLOAD AUDIO
+                # =========================
 
-                r = session.get(audio_url, timeout=15)
+                r = session.get(
+                    audio_url,
+                    timeout=15
+                )
 
                 with open("captcha.mp3", "wb") as f:
 
                     f.write(r.content)
 
-                # CONVERT
+                print("AUDIO DOWNLOADED")
+
+                # =========================
+                # MP3 -> WAV
+                # =========================
 
                 AudioSegment.from_mp3(
                     "captcha.mp3"
@@ -200,21 +501,32 @@ def solve_recaptcha(url):
                     format="wav"
                 )
 
-                # SPEECH TO TEXT
+                print("WAV CREATED")
+
+                # =========================
+                # SPEECH RECOGNITION
+                # =========================
 
                 with sr.AudioFile("captcha.wav") as source:
 
                     audio_data = recognizer.record(source)
 
-                text = recognizer.recognize_google(audio_data)
+                text = recognizer.recognize_google(
+                    audio_data
+                )
 
                 print("TEXT:", text)
 
-                # INPUT
+                # =========================
+                # INPUT ANSWER
+                # =========================
 
                 input_box = wait.until(
                     EC.presence_of_element_located(
-                        (By.ID, "audio-response")
+                        (
+                            By.ID,
+                            "audio-response"
+                        )
                     )
                 )
 
@@ -222,128 +534,157 @@ def solve_recaptcha(url):
 
                 input_box.send_keys(text)
 
+                print("ANSWER TYPED")
+
+                # =========================
                 # VERIFY
+                # =========================
 
-                verify_button = driver.find_element(
-                    By.ID,
-                    "recaptcha-verify-button"
-                )
+                wait.until(
+                    EC.element_to_be_clickable(
+                        (
+                            By.ID,
+                            "recaptcha-verify-button"
+                        )
+                    )
+                ).click()
 
-                verify_button.click()
+                print("VERIFY CLICKED")
 
-                time.sleep(3)
+                time.sleep(1)
 
-                # CHECK SUCCESS
-
-                driver.switch_to.default_content()
-
-                frames = driver.find_elements(
-                    By.TAG_NAME,
-                    "iframe"
-                )
+                # =========================
+                # CHECK SOLVED
+                # =========================
 
                 solved = False
 
-                for frame in frames:
+                if switch_to_anchor():
 
-                    src = frame.get_attribute("src")
+                    checked = wait.until(
+                        EC.presence_of_element_located(
+                            (
+                                By.ID,
+                                "recaptcha-anchor"
+                            )
+                        )
+                    ).get_attribute(
+                        "aria-checked"
+                    )
 
-                    if src and "anchor" in src:
+                    print("CHECKED:", checked)
 
-                        driver.switch_to.frame(frame)
+                    if checked == "true":
 
-                        checked = driver.find_element(
-                            By.ID,
-                            "recaptcha-anchor"
-                        ).get_attribute("aria-checked")
-
-                        if checked == "true":
-
-                            solved = True
-
-                        break
+                        solved = True
 
                 if solved:
 
-                    print("SUCCESS")
+                    print("\nCAPTCHA SOLVED")
 
-                    return {
+                    driver.switch_to.default_content()
+
+                    token = driver.execute_script("""
+                    return document.getElementById(
+                        'g-recaptcha-response'
+                    ).value
+                    """)
+
+                    result = {
                         "success": True,
-                        "message": "captcha solved"
+                        "token": token,
+                        "solve_time": round(
+                            time.time() - solve_start,
+                            2
+                        )
                     }
 
-                # RETRY
-
-                driver.switch_to.default_content()
-
-                frames = driver.find_elements(
-                    By.TAG_NAME,
-                    "iframe"
-                )
-
-                for frame in frames:
-
-                    src = frame.get_attribute("src")
-
-                    if src and "bframe" in src:
-
-                        driver.switch_to.frame(frame)
-                        break
-
-                reload_btn = wait.until(
-                    EC.element_to_be_clickable(
-                        (By.ID, "recaptcha-reload-button")
+                    print(
+                        json.dumps(
+                            result,
+                            indent=4
+                        )
                     )
-                )
 
-                reload_btn.click()
+                    return result
 
-                time.sleep(2)
+                print("NOT SOLVED")
 
-            except Exception as e:
+            except (
+                NoSuchElementException,
+                TimeoutException,
+                WebDriverException,
+                Exception
+            ) as e:
 
-                print("attempt error:", e)
+                print("\nATTEMPT ERROR:", e)
+
+                # =========================
+                # CHANGE TOR IP
+                # =========================
+
+                print("\nCHANGING TOR IP...\n")
+
+                renew_tor_ip()
+
+                # =========================
+                # RESTART FIREFOX
+                # =========================
+
+                restart_driver()
+
+                try:
+
+                    # check new ip
+                    driver.get("https://api.ipify.org")
+
+                    print(
+                        "NEW TOR IP:",
+                        driver.page_source
+                    )
+
+                    # reopen target
+                    driver.delete_all_cookies()
+
+                    driver.get(url)
+
+                    time.sleep(1)
+
+                except Exception as err:
+
+                    print("REOPEN ERROR:", err)
+
+                continue
 
         return {
             "success": False,
-            "message": "failed solve"
+            "message": "failed solve captcha",
+            "solve_time": round(
+                time.time() - solve_start,
+                2
+            )
         }
 
     except Exception as e:
 
+        print("MAIN ERROR:", e)
+
+        renew_tor_ip()
+
+        restart_driver()
+
         return {
             "success": False,
-            "message": str(e)
+            "message": str(e),
+            "solve_time": round(
+                time.time() - solve_start,
+                2
+            )
         }
-
-    finally:
-
-        # DELETE FILES
-
-        for f in ["captcha.mp3", "captcha.wav"]:
-
-            if os.path.exists(f):
-
-                os.remove(f)
-
-        # CLOSE FIREFOX
-
-        if driver:
-
-            driver.quit()
-
-            print("firefox closed")
 
 # =========================
 # API
 # =========================
-
-@app.route("/")
-def home():
-
-    return jsonify({
-        "status": "running"
-    })
 
 @app.route("/solve", methods=["POST"])
 def solve():
@@ -375,6 +716,8 @@ def solve():
 # =========================
 
 if __name__ == "__main__":
+
+    init_driver()
 
     app.run(
         host="0.0.0.0",
