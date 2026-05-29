@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 # =========================
-# INSTALL SYSTEM PACKAGE
+# SYSTEM PACKAGE
 # =========================
 
 RUN apt-get update && apt-get install -y \
@@ -11,7 +11,6 @@ RUN apt-get update && apt-get install -y \
     wget \
     curl \
     unzip \
-    gnupg \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -32,7 +31,7 @@ RUN wget https://github.com/mozilla/geckodriver/releases/download/v0.34.0/geckod
 WORKDIR /app
 
 # =========================
-# COPY FILE
+# COPY PROJECT
 # =========================
 
 COPY . /app
@@ -51,9 +50,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN echo "ControlPort 9051" >> /etc/tor/torrc
 
-RUN echo 'CookieAuthentication 0' >> /etc/tor/torrc
-
-RUN echo 'HashedControlPassword ""' >> /etc/tor/torrc
+RUN echo "CookieAuthentication 0" >> /etc/tor/torrc
 
 # =========================
 # PORT
@@ -67,4 +64,4 @@ EXPOSE 8080
 
 CMD tor & \
     sleep 10 && \
-    python app.py
+    gunicorn -w 1 -b 0.0.0.0:$PORT app:app
