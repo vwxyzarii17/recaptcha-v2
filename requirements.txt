@@ -3,7 +3,8 @@ Flask==3.0.3
 requests==2.32.3
 SpeechRecognition==3.10.4
 pydub==0.25.1
-PyAudio==0.2.14
 
 stem==1.8.2
 PySocks==1.7.1
+
+gunicorn==22.0.0
