@@ -26,13 +26,6 @@ import os
 import json
 
 # =========================
-# ENV
-# =========================
-
-os.environ["PATH"] += ":/data/data/com.termux/files/usr/bin"
-os.environ["MOZ_DISABLE_CONTENT_SANDBOX"] = "1"
-
-# =========================
 # FLASK
 # =========================
 
@@ -89,7 +82,7 @@ def restart_driver():
     except:
         pass
 
-    time.sleep(1)
+    time.sleep(2)
 
     init_driver()
 
@@ -118,9 +111,6 @@ def init_driver():
 
     # headless
     options.add_argument("-headless")
-
-    # termux x11
-    options.add_argument("--display=:1")
 
     # =========================
     # TOR
@@ -212,50 +202,10 @@ def init_driver():
         False
     )
 
-    options.set_preference(
-        "browser.cache.disk.enable",
-        True
-    )
-
-    options.set_preference(
-        "browser.cache.memory.enable",
-        True
-    )
-
-    # =========================
-    # STARTUP
-    # =========================
-
-    options.set_preference(
-        "browser.startup.page",
-        0
-    )
-
-    options.set_preference(
-        "browser.startup.homepage",
-        "about:blank"
-    )
-
-    options.set_preference(
-        "startup.homepage_welcome_url",
-        "about:blank"
-    )
-
-    options.set_preference(
-        "startup.homepage_welcome_url.additional",
-        ""
-    )
-
-    options.set_preference(
-        "browser.newtabpage.enabled",
-        False
-    )
-
     print("START FIREFOX")
 
     service = Service(
-        "/data/data/com.termux/files/usr/bin/geckodriver",
-        log_output=os.devnull
+        "/usr/local/bin/geckodriver"
     )
 
     driver = webdriver.Firefox(
@@ -263,30 +213,11 @@ def init_driver():
         options=options
     )
 
-    driver.set_window_size(900, 700)
+    driver.set_window_size(1280, 720)
 
-    driver.set_page_load_timeout(30)
+    driver.set_page_load_timeout(60)
 
-    wait = WebDriverWait(driver, 15)
-
-    # remove extra tabs
-    tabs = driver.window_handles
-
-    if len(tabs) > 1:
-
-        main_tab = tabs[0]
-
-        for tab in tabs[1:]:
-
-            driver.switch_to.window(tab)
-            driver.close()
-
-        driver.switch_to.window(main_tab)
-
-    # block popup
-    driver.execute_script("""
-    window.open = function(){};
-    """)
+    wait = WebDriverWait(driver, 20)
 
     print("FIREFOX READY")
 
@@ -365,23 +296,11 @@ def solve_recaptcha(url):
 
     try:
 
-        # =========================
-        # NEW TOR IP
-        # =========================
-
         renew_tor_ip()
-
-        # =========================
-        # CHECK IP
-        # =========================
 
         driver.get("https://api.ipify.org")
 
         print("TOR IP:", driver.page_source)
-
-        # =========================
-        # OPEN TARGET
-        # =========================
 
         driver.delete_all_cookies()
 
@@ -389,12 +308,10 @@ def solve_recaptcha(url):
 
         driver.get(url)
 
-        
-
         print("TITLE:", driver.title)
 
         # =========================
-        # FIND CHECKBOX
+        # CHECKBOX
         # =========================
 
         if not switch_to_anchor():
@@ -453,14 +370,9 @@ def solve_recaptcha(url):
 
                 print(f"\nATTEMPT {attempt + 1}")
 
-                # refresh frame
                 if not switch_to_bframe():
 
                     raise Exception("bframe missing")
-
-                # =========================
-                # AUDIO URL
-                # =========================
 
                 audio_source = wait.until(
                     EC.presence_of_element_located(
@@ -481,7 +393,7 @@ def solve_recaptcha(url):
 
                 r = session.get(
                     audio_url,
-                    timeout=15
+                    timeout=20
                 )
 
                 with open("captcha.mp3", "wb") as f:
@@ -491,7 +403,7 @@ def solve_recaptcha(url):
                 print("AUDIO DOWNLOADED")
 
                 # =========================
-                # MP3 -> WAV
+                # MP3 TO WAV
                 # =========================
 
                 AudioSegment.from_mp3(
@@ -536,10 +448,6 @@ def solve_recaptcha(url):
 
                 print("ANSWER TYPED")
 
-                # =========================
-                # VERIFY
-                # =========================
-
                 wait.until(
                     EC.element_to_be_clickable(
                         (
@@ -552,10 +460,6 @@ def solve_recaptcha(url):
                 print("VERIFY CLICKED")
 
                 time.sleep(1)
-
-                # =========================
-                # CHECK SOLVED
-                # =========================
 
                 solved = False
 
@@ -610,41 +514,15 @@ def solve_recaptcha(url):
 
                 print("NOT SOLVED")
 
-            except (
-                NoSuchElementException,
-                TimeoutException,
-                WebDriverException,
-                Exception
-            ) as e:
+            except Exception as e:
 
                 print("\nATTEMPT ERROR:", e)
 
-                # =========================
-                # CHANGE TOR IP
-                # =========================
-
-                print("\nCHANGING TOR IP...\n")
-
                 renew_tor_ip()
-
-                # =========================
-                # RESTART FIREFOX
-                # =========================
 
                 restart_driver()
 
                 try:
-
-                    # check new ip
-                    driver.get("https://api.ipify.org")
-
-                    print(
-                        "NEW TOR IP:",
-                        driver.page_source
-                    )
-
-                    # reopen target
-                    driver.delete_all_cookies()
 
                     driver.get(url)
 
@@ -714,7 +592,9 @@ def solve():
 # =========================
 # MAIN
 # =========================
+
 if __name__ == "__main__":
+
     init_driver()
 
     port = int(os.environ.get("PORT", 8080))
@@ -723,5 +603,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=port,
         threaded=True
-    )
-
+        )
