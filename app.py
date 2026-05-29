@@ -21,8 +21,12 @@ from flask import Flask, request, jsonify
 
 import requests
 import threading
+import tempfile
+import traceback
+import atexit
 import time
 import os
+import uuid
 
 # =========================
 # FLASK
@@ -38,8 +42,10 @@ driver = None
 wait = None
 MAIN_WINDOW = None
 
-# thread safe
 driver_lock = threading.Lock()
+
+REQUEST_COUNT = 0
+MAX_REQUEST_BEFORE_RESTART = 100
 
 # =========================
 # TOR ROTATE
@@ -57,7 +63,7 @@ def renew_tor_ip():
 
         print("TOR IP CHANGED")
 
-        time.sleep(10)
+        time.sleep(5)
 
         return True
 
@@ -77,124 +83,193 @@ def init_driver():
     global wait
     global MAIN_WINDOW
 
-    options = Options()
+    try:
 
-    # =========================
-    # HEADLESS
-    # =========================
+        print("INIT FIREFOX DRIVER")
 
-    options.add_argument("-headless")
+        options = Options()
 
-    # =========================
-    # PERFORMANCE
-    # =========================
+        # =========================
+        # FIREFOX BIN
+        # =========================
 
-    options.set_preference(
-        "permissions.default.image",
-        2
-    )
+        options.binary_location = "/usr/bin/firefox-esr"
 
-    options.set_preference(
-        "browser.display.use_document_fonts",
-        0
-    )
+        # =========================
+        # HEADLESS
+        # =========================
 
-    options.set_preference(
-        "toolkit.cosmeticAnimations.enabled",
-        False
-    )
+        options.add_argument("-headless")
 
-    options.set_preference(
-        "browser.tabs.animate",
-        False
-    )
+        # =========================
+        # CONTAINER FIX
+        # =========================
 
-    options.set_preference(
-        "browser.cache.disk.enable",
-        True
-    )
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
 
-    options.set_preference(
-        "browser.cache.memory.enable",
-        True
-    )
+        # =========================
+        # PERFORMANCE
+        # =========================
 
-    # =========================
-    # LOAD STRATEGY
-    # =========================
+        options.set_preference(
+            "permissions.default.image",
+            2
+        )
 
-    options.set_preference(
-        "webdriver.load.strategy",
-        "eager"
-    )
+        options.set_preference(
+            "browser.display.use_document_fonts",
+            0
+        )
 
-    # =========================
-    # TOR
-    # =========================
+        options.set_preference(
+            "toolkit.cosmeticAnimations.enabled",
+            False
+        )
 
-    options.set_preference(
-        "network.proxy.type",
-        1
-    )
+        options.set_preference(
+            "browser.tabs.animate",
+            False
+        )
 
-    options.set_preference(
-        "network.proxy.socks",
-        "127.0.0.1"
-    )
+        # =========================
+        # LOAD STRATEGY
+        # =========================
 
-    options.set_preference(
-        "network.proxy.socks_port",
-        9050
-    )
+        options.set_preference(
+            "webdriver.load.strategy",
+            "eager"
+        )
 
-    options.set_preference(
-        "network.proxy.socks_version",
-        5
-    )
+        # =========================
+        # TOR SOCKS
+        # =========================
 
-    options.set_preference(
-        "network.proxy.socks_remote_dns",
-        True
-    )
+        options.set_preference(
+            "network.proxy.type",
+            1
+        )
 
-    # =========================
-    # ANTI LEAK
-    # =========================
+        options.set_preference(
+            "network.proxy.socks",
+            "127.0.0.1"
+        )
 
-    options.set_preference(
-        "media.peerconnection.enabled",
-        False
-    )
+        options.set_preference(
+            "network.proxy.socks_port",
+            9050
+        )
 
-    # =========================
-    # ANTI SELENIUM
-    # =========================
+        options.set_preference(
+            "network.proxy.socks_version",
+            5
+        )
 
-    options.set_preference(
-        "dom.webdriver.enabled",
-        False
-    )
+        options.set_preference(
+            "network.proxy.socks_remote_dns",
+            True
+        )
 
-    print("START FIREFOX")
+        # =========================
+        # WEBRTC LEAK FIX
+        # =========================
 
-    service = Service(
-        "/usr/local/bin/geckodriver"
-    )
+        options.set_preference(
+            "media.peerconnection.enabled",
+            False
+        )
 
-    driver = webdriver.Firefox(
-        service=service,
-        options=options
-    )
+        # =========================
+        # ANTI SELENIUM
+        # =========================
 
-    driver.set_window_size(1280, 720)
+        options.set_preference(
+            "dom.webdriver.enabled",
+            False
+        )
 
-    driver.set_page_load_timeout(20)
+        # =========================
+        # DRIVER
+        # =========================
 
-    wait = WebDriverWait(driver, 8)
+        service = Service(
+            "/usr/local/bin/geckodriver"
+        )
 
-    MAIN_WINDOW = driver.current_window_handle
+        driver = webdriver.Firefox(
+            service=service,
+            options=options
+        )
 
-    print("FIREFOX READY")
+        driver.set_window_size(1280, 720)
+
+        driver.set_page_load_timeout(20)
+
+        wait = WebDriverWait(driver, 10)
+
+        MAIN_WINDOW = driver.current_window_handle
+
+        print("FIREFOX READY")
+
+    except Exception as e:
+
+        print("INIT DRIVER ERROR")
+        print(str(e))
+        traceback.print_exc()
+
+        driver = None
+
+# =========================
+# ENSURE DRIVER
+# =========================
+
+def ensure_driver():
+
+    global driver
+
+    try:
+
+        if driver is None:
+
+            print("DRIVER NONE -> REINIT")
+
+            init_driver()
+
+            return
+
+        driver.title
+
+    except Exception:
+
+        print("DRIVER DEAD -> REINIT")
+
+        try:
+            driver.quit()
+        except:
+            pass
+
+        init_driver()
+
+# =========================
+# RESTART DRIVER
+# =========================
+
+def restart_driver():
+
+    global driver
+
+    print("RESTART DRIVER")
+
+    try:
+
+        if driver:
+
+            driver.quit()
+
+    except:
+        pass
+
+    init_driver()
 
 # =========================
 # CREATE TAB
@@ -204,9 +279,7 @@ def create_page():
 
     global driver
 
-    driver.switch_to.new_window('tab')
-
-    return driver.current_window_handle
+    driver.switch_to.new_window("tab")
 
 # =========================
 # CLOSE TAB
@@ -295,6 +368,7 @@ def switch_to_bframe():
 
 def solve_recaptcha(url):
 
+    global REQUEST_COUNT
     global driver
     global wait
 
@@ -304,9 +378,46 @@ def solve_recaptcha(url):
 
     session = requests.Session()
 
+    uid = str(uuid.uuid4())
+
+    mp3_path = os.path.join(
+        tempfile.gettempdir(),
+        f"{uid}.mp3"
+    )
+
+    wav_path = os.path.join(
+        tempfile.gettempdir(),
+        f"{uid}.wav"
+    )
+
     try:
 
         with driver_lock:
+
+            # =========================
+            # ENSURE DRIVER
+            # =========================
+
+            ensure_driver()
+
+            if driver is None:
+
+                return {
+                    "success": False,
+                    "message": "driver failed init"
+                }
+
+            # =========================
+            # AUTO RESTART
+            # =========================
+
+            REQUEST_COUNT += 1
+
+            if REQUEST_COUNT >= MAX_REQUEST_BEFORE_RESTART:
+
+                REQUEST_COUNT = 0
+
+                restart_driver()
 
             # =========================
             # NEW TAB
@@ -319,7 +430,7 @@ def solve_recaptcha(url):
             driver.get(url)
 
             # =========================
-            # CHECKBOX
+            # SWITCH ANCHOR
             # =========================
 
             if not switch_to_anchor():
@@ -330,6 +441,10 @@ def solve_recaptcha(url):
                     "success": False,
                     "message": "anchor iframe not found"
                 }
+
+            # =========================
+            # CLICK CHECKBOX
+            # =========================
 
             checkbox = wait.until(
                 EC.element_to_be_clickable(
@@ -347,7 +462,7 @@ def solve_recaptcha(url):
             time.sleep(2)
 
             # =========================
-            # AUDIO BUTTON
+            # SWITCH BFRAME
             # =========================
 
             if not switch_to_bframe():
@@ -356,8 +471,12 @@ def solve_recaptcha(url):
 
                 return {
                     "success": False,
-                    "message": "bframe not found"
+                    "message": "bframe iframe not found"
                 }
+
+            # =========================
+            # AUDIO BUTTON
+            # =========================
 
             audio_button = wait.until(
                 EC.element_to_be_clickable(
@@ -384,10 +503,12 @@ def solve_recaptcha(url):
 
                     if not switch_to_bframe():
 
-                        raise Exception("bframe missing")
+                        raise Exception(
+                            "bframe missing"
+                        )
 
                     # =========================
-                    # AUDIO URL
+                    # AUDIO SOURCE
                     # =========================
 
                     audio_source = wait.until(
@@ -399,9 +520,11 @@ def solve_recaptcha(url):
                         )
                     )
 
-                    audio_url = audio_source.get_attribute("src")
+                    audio_url = audio_source.get_attribute(
+                        "src"
+                    )
 
-                    print(audio_url)
+                    print("AUDIO URL:", audio_url)
 
                     # =========================
                     # DOWNLOAD AUDIO
@@ -409,21 +532,21 @@ def solve_recaptcha(url):
 
                     r = session.get(
                         audio_url,
-                        timeout=10
+                        timeout=15
                     )
 
-                    with open("captcha.mp3", "wb") as f:
+                    with open(mp3_path, "wb") as f:
 
                         f.write(r.content)
 
                     # =========================
-                    # MP3 -> WAV
+                    # CONVERT AUDIO
                     # =========================
 
                     AudioSegment.from_mp3(
-                        "captcha.mp3"
+                        mp3_path
                     ).export(
-                        "captcha.wav",
+                        wav_path,
                         format="wav"
                     )
 
@@ -432,7 +555,7 @@ def solve_recaptcha(url):
                     # =========================
 
                     with sr.AudioFile(
-                        "captcha.wav"
+                        wav_path
                     ) as source:
 
                         audio_data = recognizer.record(
@@ -446,7 +569,7 @@ def solve_recaptcha(url):
                     print("TEXT:", text)
 
                     # =========================
-                    # INPUT ANSWER
+                    # INPUT
                     # =========================
 
                     input_box = wait.until(
@@ -466,16 +589,18 @@ def solve_recaptcha(url):
                     # VERIFY
                     # =========================
 
-                    wait.until(
+                    verify_button = wait.until(
                         EC.element_to_be_clickable(
                             (
                                 By.ID,
                                 "recaptcha-verify-button"
                             )
                         )
-                    ).click()
+                    )
 
-                    time.sleep(2)
+                    verify_button.click()
+
+                    time.sleep(3)
 
                     # =========================
                     # CHECK SOLVED
@@ -501,9 +626,9 @@ def solve_recaptcha(url):
                             driver.switch_to.default_content()
 
                             token = driver.execute_script("""
-                            return document.getElementById(
-                                'g-recaptcha-response'
-                            ).value
+                                return document.getElementById(
+                                    'g-recaptcha-response'
+                                ).value
                             """)
 
                             close_page()
@@ -523,7 +648,7 @@ def solve_recaptcha(url):
 
                     driver.refresh()
 
-                    time.sleep(2)
+                    time.sleep(3)
 
                 except Exception as e:
 
@@ -533,9 +658,7 @@ def solve_recaptcha(url):
 
                     driver.refresh()
 
-                    time.sleep(2)
-
-                    continue
+                    time.sleep(3)
 
             close_page()
 
@@ -556,6 +679,8 @@ def solve_recaptcha(url):
 
         print("MAIN ERROR:", e)
 
+        traceback.print_exc()
+
         close_page()
 
         return {
@@ -567,6 +692,21 @@ def solve_recaptcha(url):
             )
         }
 
+    finally:
+
+        try:
+
+            if os.path.exists(mp3_path):
+
+                os.remove(mp3_path)
+
+            if os.path.exists(wav_path):
+
+                os.remove(wav_path)
+
+        except:
+            pass
+
 # =========================
 # HOME
 # =========================
@@ -577,6 +717,20 @@ def home():
     return jsonify({
         "success": True,
         "message": "solver online"
+    })
+
+# =========================
+# HEALTH
+# =========================
+
+@app.route("/health")
+def health():
+
+    global driver
+
+    return jsonify({
+        "success": True,
+        "driver_alive": driver is not None
     })
 
 # =========================
@@ -609,12 +763,36 @@ def solve():
     return jsonify(result)
 
 # =========================
+# CLEANUP
+# =========================
+
+@atexit.register
+def cleanup():
+
+    global driver
+
+    try:
+
+        if driver:
+
+            print("QUIT DRIVER")
+
+            driver.quit()
+
+    except:
+        pass
+
+# =========================
 # MAIN
 # =========================
 
 if __name__ == "__main__":
 
     init_driver()
+
+    if driver is None:
+
+        print("FAILED INIT DRIVER")
 
     port = int(
         os.environ.get(
@@ -627,4 +805,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=port,
         threaded=True
-                             )
+        )
