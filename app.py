@@ -20,6 +20,7 @@ from pydub import AudioSegment
 from flask import Flask, request, jsonify
 
 import requests
+import threading
 import time
 import os
 
@@ -35,6 +36,10 @@ app = Flask(__name__)
 
 driver = None
 wait = None
+MAIN_WINDOW = None
+
+# thread safe
+driver_lock = threading.Lock()
 
 # =========================
 # TOR ROTATE
@@ -70,6 +75,7 @@ def init_driver():
 
     global driver
     global wait
+    global MAIN_WINDOW
 
     options = Options()
 
@@ -169,11 +175,6 @@ def init_driver():
         False
     )
 
-    options.set_preference(
-        "useAutomationExtension",
-        False
-    )
-
     print("START FIREFOX")
 
     service = Service(
@@ -191,7 +192,44 @@ def init_driver():
 
     wait = WebDriverWait(driver, 8)
 
+    MAIN_WINDOW = driver.current_window_handle
+
     print("FIREFOX READY")
+
+# =========================
+# CREATE TAB
+# =========================
+
+def create_page():
+
+    global driver
+
+    driver.switch_to.new_window('tab')
+
+    return driver.current_window_handle
+
+# =========================
+# CLOSE TAB
+# =========================
+
+def close_page():
+
+    global driver
+    global MAIN_WINDOW
+
+    try:
+
+        current = driver.current_window_handle
+
+        if current != MAIN_WINDOW:
+
+            driver.close()
+
+            driver.switch_to.window(MAIN_WINDOW)
+
+    except Exception as e:
+
+        print("CLOSE PAGE ERROR:", e)
 
 # =========================
 # SWITCH ANCHOR
@@ -268,229 +306,247 @@ def solve_recaptcha(url):
 
     try:
 
-        print("OPEN:", url)
+        with driver_lock:
 
-        driver.delete_all_cookies()
+            # =========================
+            # NEW TAB
+            # =========================
 
-        driver.get(url)
+            create_page()
 
-        # =========================
-        # CHECKBOX
-        # =========================
+            print("OPEN:", url)
 
-        if not switch_to_anchor():
+            driver.get(url)
 
-            return {
-                "success": False,
-                "message": "anchor iframe not found"
-            }
+            # =========================
+            # CHECKBOX
+            # =========================
 
-        checkbox = wait.until(
-            EC.element_to_be_clickable(
-                (
-                    By.ID,
-                    "recaptcha-anchor"
+            if not switch_to_anchor():
+
+                close_page()
+
+                return {
+                    "success": False,
+                    "message": "anchor iframe not found"
+                }
+
+            checkbox = wait.until(
+                EC.element_to_be_clickable(
+                    (
+                        By.ID,
+                        "recaptcha-anchor"
+                    )
                 )
             )
-        )
 
-        checkbox.click()
+            checkbox.click()
 
-        print("CHECKBOX CLICKED")
+            print("CHECKBOX CLICKED")
 
-        time.sleep(1)
+            time.sleep(2)
 
-        # =========================
-        # AUDIO BUTTON
-        # =========================
+            # =========================
+            # AUDIO BUTTON
+            # =========================
 
-        if not switch_to_bframe():
+            if not switch_to_bframe():
 
-            return {
-                "success": False,
-                "message": "bframe not found"
-            }
+                close_page()
 
-        audio_button = wait.until(
-            EC.element_to_be_clickable(
-                (
-                    By.ID,
-                    "recaptcha-audio-button"
+                return {
+                    "success": False,
+                    "message": "bframe not found"
+                }
+
+            audio_button = wait.until(
+                EC.element_to_be_clickable(
+                    (
+                        By.ID,
+                        "recaptcha-audio-button"
+                    )
                 )
             )
-        )
 
-        audio_button.click()
+            audio_button.click()
 
-        print("AUDIO MODE")
+            print("AUDIO MODE")
 
-        # =========================
-        # ATTEMPT
-        # =========================
+            # =========================
+            # ATTEMPTS
+            # =========================
 
-        for attempt in range(5):
+            for attempt in range(5):
 
-            try:
+                try:
 
-                print(f"ATTEMPT {attempt+1}")
+                    print(f"ATTEMPT {attempt+1}")
 
-                if not switch_to_bframe():
+                    if not switch_to_bframe():
 
-                    raise Exception("bframe missing")
+                        raise Exception("bframe missing")
 
-                # =========================
-                # AUDIO URL
-                # =========================
+                    # =========================
+                    # AUDIO URL
+                    # =========================
 
-                audio_source = wait.until(
-                    EC.presence_of_element_located(
-                        (
-                            By.ID,
-                            "audio-source"
-                        )
-                    )
-                )
-
-                audio_url = audio_source.get_attribute("src")
-
-                print(audio_url)
-
-                # =========================
-                # DOWNLOAD AUDIO
-                # =========================
-
-                r = session.get(
-                    audio_url,
-                    timeout=10
-                )
-
-                with open("captcha.mp3", "wb") as f:
-
-                    f.write(r.content)
-
-                # =========================
-                # MP3 -> WAV
-                # =========================
-
-                AudioSegment.from_mp3(
-                    "captcha.mp3"
-                ).export(
-                    "captcha.wav",
-                    format="wav"
-                )
-
-                # =========================
-                # SPEECH TO TEXT
-                # =========================
-
-                with sr.AudioFile("captcha.wav") as source:
-
-                    audio_data = recognizer.record(source)
-
-                text = recognizer.recognize_google(
-                    audio_data
-                )
-
-                print("TEXT:", text)
-
-                # =========================
-                # INPUT ANSWER
-                # =========================
-
-                input_box = wait.until(
-                    EC.presence_of_element_located(
-                        (
-                            By.ID,
-                            "audio-response"
-                        )
-                    )
-                )
-
-                input_box.clear()
-
-                input_box.send_keys(text)
-
-                # =========================
-                # VERIFY
-                # =========================
-
-                wait.until(
-                    EC.element_to_be_clickable(
-                        (
-                            By.ID,
-                            "recaptcha-verify-button"
-                        )
-                    )
-                ).click()
-
-                time.sleep(1)
-
-                # =========================
-                # CHECK SOLVED
-                # =========================
-
-                if switch_to_anchor():
-
-                    checked = wait.until(
+                    audio_source = wait.until(
                         EC.presence_of_element_located(
                             (
                                 By.ID,
-                                "recaptcha-anchor"
+                                "audio-source"
                             )
                         )
-                    ).get_attribute(
-                        "aria-checked"
                     )
 
-                    print("CHECKED:", checked)
+                    audio_url = audio_source.get_attribute("src")
 
-                    if checked == "true":
+                    print(audio_url)
 
-                        driver.switch_to.default_content()
+                    # =========================
+                    # DOWNLOAD AUDIO
+                    # =========================
 
-                        token = driver.execute_script("""
-                        return document.getElementById(
-                            'g-recaptcha-response'
-                        ).value
-                        """)
+                    r = session.get(
+                        audio_url,
+                        timeout=10
+                    )
 
-                        return {
-                            "success": True,
-                            "token": token,
-                            "solve_time": round(
-                                time.time() - start_time,
-                                2
+                    with open("captcha.mp3", "wb") as f:
+
+                        f.write(r.content)
+
+                    # =========================
+                    # MP3 -> WAV
+                    # =========================
+
+                    AudioSegment.from_mp3(
+                        "captcha.mp3"
+                    ).export(
+                        "captcha.wav",
+                        format="wav"
+                    )
+
+                    # =========================
+                    # SPEECH TO TEXT
+                    # =========================
+
+                    with sr.AudioFile(
+                        "captcha.wav"
+                    ) as source:
+
+                        audio_data = recognizer.record(
+                            source
+                        )
+
+                    text = recognizer.recognize_google(
+                        audio_data
+                    )
+
+                    print("TEXT:", text)
+
+                    # =========================
+                    # INPUT ANSWER
+                    # =========================
+
+                    input_box = wait.until(
+                        EC.presence_of_element_located(
+                            (
+                                By.ID,
+                                "audio-response"
                             )
-                        }
+                        )
+                    )
 
-                print("FAILED")
+                    input_box.clear()
 
-                renew_tor_ip()
+                    input_box.send_keys(text)
 
-                driver.refresh()
+                    # =========================
+                    # VERIFY
+                    # =========================
 
-                time.sleep(1)
+                    wait.until(
+                        EC.element_to_be_clickable(
+                            (
+                                By.ID,
+                                "recaptcha-verify-button"
+                            )
+                        )
+                    ).click()
 
-            except Exception as e:
+                    time.sleep(2)
 
-                print("ATTEMPT ERROR:", e)
+                    # =========================
+                    # CHECK SOLVED
+                    # =========================
 
-                renew_tor_ip()
+                    if switch_to_anchor():
 
-                driver.refresh()
+                        checked = wait.until(
+                            EC.presence_of_element_located(
+                                (
+                                    By.ID,
+                                    "recaptcha-anchor"
+                                )
+                            )
+                        ).get_attribute(
+                            "aria-checked"
+                        )
 
-                time.sleep(1)
+                        print("CHECKED:", checked)
 
-                continue
+                        if checked == "true":
 
-        return {
-            "success": False,
-            "message": "failed solve captcha",
-            "solve_time": round(
-                time.time() - start_time,
-                2
-            )
-        }
+                            driver.switch_to.default_content()
+
+                            token = driver.execute_script("""
+                            return document.getElementById(
+                                'g-recaptcha-response'
+                            ).value
+                            """)
+
+                            close_page()
+
+                            return {
+                                "success": True,
+                                "token": token,
+                                "solve_time": round(
+                                    time.time() - start_time,
+                                    2
+                                )
+                            }
+
+                    print("FAILED")
+
+                    renew_tor_ip()
+
+                    driver.refresh()
+
+                    time.sleep(2)
+
+                except Exception as e:
+
+                    print("ATTEMPT ERROR:", e)
+
+                    renew_tor_ip()
+
+                    driver.refresh()
+
+                    time.sleep(2)
+
+                    continue
+
+            close_page()
+
+            return {
+                "success": False,
+                "message": "failed solve captcha",
+                "solve_time": round(
+                    time.time() - start_time,
+                    2
+                )
+            }
 
     except (
         TimeoutException,
@@ -499,6 +555,8 @@ def solve_recaptcha(url):
     ) as e:
 
         print("MAIN ERROR:", e)
+
+        close_page()
 
         return {
             "success": False,
@@ -558,10 +616,15 @@ if __name__ == "__main__":
 
     init_driver()
 
-    port = int(os.environ.get("PORT", 8080))
+    port = int(
+        os.environ.get(
+            "PORT",
+            8080
+        )
+    )
 
     app.run(
         host="0.0.0.0",
         port=port,
         threaded=True
-    )
+                             )
