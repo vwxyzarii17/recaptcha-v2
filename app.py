@@ -82,7 +82,7 @@ def restart_driver():
     except:
         pass
 
-    time.sleep(2)
+    time.sleep(1)
 
     init_driver()
 
