@@ -7,7 +7,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 from selenium.common.exceptions import (
-    NoSuchElementException,
     TimeoutException,
     WebDriverException
 )
@@ -23,7 +22,6 @@ from flask import Flask, request, jsonify
 import requests
 import time
 import os
-import json
 
 # =========================
 # FLASK
@@ -39,7 +37,7 @@ driver = None
 wait = None
 
 # =========================
-# TOR IP ROTATE
+# TOR ROTATE
 # =========================
 
 def renew_tor_ip():
@@ -50,11 +48,9 @@ def renew_tor_ip():
 
             controller.authenticate()
 
-            controller.signal(Signal.CLEARDNSCACHE)
-
             controller.signal(Signal.NEWNYM)
 
-        print("\nTOR IP CHANGED\n")
+        print("TOR IP CHANGED")
 
         time.sleep(10)
 
@@ -62,44 +58,12 @@ def renew_tor_ip():
 
     except Exception as e:
 
-        print("FAILED CHANGE IP:", e)
+        print("TOR ERROR:", e)
 
         return False
 
 # =========================
-# RESTART FIREFOX
-# =========================
-
-def restart_driver():
-
-    global driver
-    global wait
-
-    print("\nRESTARTING FIREFOX...\n")
-
-    try:
-        driver.quit()
-    except:
-        pass
-
-    time.sleep(1)
-
-    init_driver()
-
-# =========================
-# HOME
-# =========================
-
-@app.route("/")
-def home():
-
-    return jsonify({
-        "success": True,
-        "message": "solver online"
-    })
-
-# =========================
-# INIT FIREFOX
+# INIT DRIVER
 # =========================
 
 def init_driver():
@@ -109,8 +73,54 @@ def init_driver():
 
     options = Options()
 
-    # headless
+    # =========================
+    # HEADLESS
+    # =========================
+
     options.add_argument("-headless")
+
+    # =========================
+    # PERFORMANCE
+    # =========================
+
+    options.set_preference(
+        "permissions.default.image",
+        2
+    )
+
+    options.set_preference(
+        "browser.display.use_document_fonts",
+        0
+    )
+
+    options.set_preference(
+        "toolkit.cosmeticAnimations.enabled",
+        False
+    )
+
+    options.set_preference(
+        "browser.tabs.animate",
+        False
+    )
+
+    options.set_preference(
+        "browser.cache.disk.enable",
+        True
+    )
+
+    options.set_preference(
+        "browser.cache.memory.enable",
+        True
+    )
+
+    # =========================
+    # LOAD STRATEGY
+    # =========================
+
+    options.set_preference(
+        "webdriver.load.strategy",
+        "eager"
+    )
 
     # =========================
     # TOR
@@ -151,25 +161,6 @@ def init_driver():
     )
 
     # =========================
-    # ANTI FINGERPRINT
-    # =========================
-
-    options.set_preference(
-        "privacy.firstparty.isolate",
-        True
-    )
-
-    options.set_preference(
-        "network.cookie.cookieBehavior",
-        1
-    )
-
-    options.set_preference(
-        "privacy.resistFingerprinting",
-        True
-    )
-
-    # =========================
     # ANTI SELENIUM
     # =========================
 
@@ -180,25 +171,6 @@ def init_driver():
 
     options.set_preference(
         "useAutomationExtension",
-        False
-    )
-
-    options.set_preference(
-        "media.navigator.enabled",
-        False
-    )
-
-    # =========================
-    # SPEED
-    # =========================
-
-    options.set_preference(
-        "permissions.default.image",
-        2
-    )
-
-    options.set_preference(
-        "toolkit.cosmeticAnimations.enabled",
         False
     )
 
@@ -215,9 +187,9 @@ def init_driver():
 
     driver.set_window_size(1280, 720)
 
-    driver.set_page_load_timeout(60)
+    driver.set_page_load_timeout(20)
 
-    wait = WebDriverWait(driver, 20)
+    wait = WebDriverWait(driver, 8)
 
     print("FIREFOX READY")
 
@@ -288,27 +260,19 @@ def solve_recaptcha(url):
     global driver
     global wait
 
+    start_time = time.time()
+
     recognizer = sr.Recognizer()
 
     session = requests.Session()
 
-    solve_start = time.time()
-
     try:
 
-        renew_tor_ip()
-
-        driver.get("https://api.ipify.org")
-
-        print("TOR IP:", driver.page_source)
+        print("OPEN:", url)
 
         driver.delete_all_cookies()
 
-        print("\nOPEN:", url)
-
         driver.get(url)
-
-        print("TITLE:", driver.title)
 
         # =========================
         # CHECKBOX
@@ -337,7 +301,7 @@ def solve_recaptcha(url):
         time.sleep(1)
 
         # =========================
-        # AUDIO MODE
+        # AUDIO BUTTON
         # =========================
 
         if not switch_to_bframe():
@@ -358,21 +322,25 @@ def solve_recaptcha(url):
 
         audio_button.click()
 
-        print("AUDIO MODE CLICKED")
+        print("AUDIO MODE")
 
         # =========================
-        # ATTEMPTS
+        # ATTEMPT
         # =========================
 
-        for attempt in range(10):
+        for attempt in range(5):
 
             try:
 
-                print(f"\nATTEMPT {attempt + 1}")
+                print(f"ATTEMPT {attempt+1}")
 
                 if not switch_to_bframe():
 
                     raise Exception("bframe missing")
+
+                # =========================
+                # AUDIO URL
+                # =========================
 
                 audio_source = wait.until(
                     EC.presence_of_element_located(
@@ -385,7 +353,7 @@ def solve_recaptcha(url):
 
                 audio_url = audio_source.get_attribute("src")
 
-                print("AUDIO URL:", audio_url)
+                print(audio_url)
 
                 # =========================
                 # DOWNLOAD AUDIO
@@ -393,17 +361,15 @@ def solve_recaptcha(url):
 
                 r = session.get(
                     audio_url,
-                    timeout=20
+                    timeout=10
                 )
 
                 with open("captcha.mp3", "wb") as f:
 
                     f.write(r.content)
 
-                print("AUDIO DOWNLOADED")
-
                 # =========================
-                # MP3 TO WAV
+                # MP3 -> WAV
                 # =========================
 
                 AudioSegment.from_mp3(
@@ -413,10 +379,8 @@ def solve_recaptcha(url):
                     format="wav"
                 )
 
-                print("WAV CREATED")
-
                 # =========================
-                # SPEECH RECOGNITION
+                # SPEECH TO TEXT
                 # =========================
 
                 with sr.AudioFile("captcha.wav") as source:
@@ -446,7 +410,9 @@ def solve_recaptcha(url):
 
                 input_box.send_keys(text)
 
-                print("ANSWER TYPED")
+                # =========================
+                # VERIFY
+                # =========================
 
                 wait.until(
                     EC.element_to_be_clickable(
@@ -457,11 +423,11 @@ def solve_recaptcha(url):
                     )
                 ).click()
 
-                print("VERIFY CLICKED")
-
                 time.sleep(1)
 
-                solved = False
+                # =========================
+                # CHECK SOLVED
+                # =========================
 
                 if switch_to_anchor():
 
@@ -480,57 +446,40 @@ def solve_recaptcha(url):
 
                     if checked == "true":
 
-                        solved = True
+                        driver.switch_to.default_content()
 
-                if solved:
+                        token = driver.execute_script("""
+                        return document.getElementById(
+                            'g-recaptcha-response'
+                        ).value
+                        """)
 
-                    print("\nCAPTCHA SOLVED")
+                        return {
+                            "success": True,
+                            "token": token,
+                            "solve_time": round(
+                                time.time() - start_time,
+                                2
+                            )
+                        }
 
-                    driver.switch_to.default_content()
-
-                    token = driver.execute_script("""
-                    return document.getElementById(
-                        'g-recaptcha-response'
-                    ).value
-                    """)
-
-                    result = {
-                        "success": True,
-                        "token": token,
-                        "solve_time": round(
-                            time.time() - solve_start,
-                            2
-                        )
-                    }
-
-                    print(
-                        json.dumps(
-                            result,
-                            indent=4
-                        )
-                    )
-
-                    return result
-
-                print("NOT SOLVED")
-
-            except Exception as e:
-
-                print("\nATTEMPT ERROR:", e)
+                print("FAILED")
 
                 renew_tor_ip()
 
-                restart_driver()
+                driver.refresh()
 
-                try:
+                time.sleep(1)
 
-                    driver.get(url)
+            except Exception as e:
 
-                    time.sleep(1)
+                print("ATTEMPT ERROR:", e)
 
-                except Exception as err:
+                renew_tor_ip()
 
-                    print("REOPEN ERROR:", err)
+                driver.refresh()
+
+                time.sleep(1)
 
                 continue
 
@@ -538,27 +487,39 @@ def solve_recaptcha(url):
             "success": False,
             "message": "failed solve captcha",
             "solve_time": round(
-                time.time() - solve_start,
+                time.time() - start_time,
                 2
             )
         }
 
-    except Exception as e:
+    except (
+        TimeoutException,
+        WebDriverException,
+        Exception
+    ) as e:
 
         print("MAIN ERROR:", e)
-
-        renew_tor_ip()
-
-        restart_driver()
 
         return {
             "success": False,
             "message": str(e),
             "solve_time": round(
-                time.time() - solve_start,
+                time.time() - start_time,
                 2
             )
         }
+
+# =========================
+# HOME
+# =========================
+
+@app.route("/")
+def home():
+
+    return jsonify({
+        "success": True,
+        "message": "solver online"
+    })
 
 # =========================
 # API
@@ -603,4 +564,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=port,
         threaded=True
-        )
+    )
